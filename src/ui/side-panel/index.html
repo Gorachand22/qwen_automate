@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Qwen Automation</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f0f0f;
+      color: #fff;
+      min-height: 100vh;
+      padding: 16px;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #333;
+    }
+
+    .header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .header p {
+      font-size: 12px;
+      color: #888;
+    }
+
+    .status {
+      background: #1a1a1a;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 16px;
+    }
+
+    .status-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 0;
+      border-bottom: 1px solid #222;
+    }
+
+    .status-item:last-child {
+      border-bottom: none;
+    }
+
+    .status-label {
+      font-size: 12px;
+      color: #888;
+    }
+
+    .status-value {
+      font-size: 12px;
+      color: #fff;
+      font-weight: 500;
+    }
+
+    .status-value.connected {
+      color: #4ade80;
+    }
+
+    .status-value.disconnected {
+      color: #ef4444;
+    }
+
+    .task-form {
+      background: #1a1a1a;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 16px;
+    }
+
+    .form-group {
+      margin-bottom: 12px;
+    }
+
+    .form-group label {
+      display: block;
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+    }
+
+    .form-group input,
+    .form-group textarea,
+    .form-group select {
+      width: 100%;
+      background: #222;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 13px;
+      color: #fff;
+      outline: none;
+    }
+
+    .form-group input:focus,
+    .form-group textarea:focus,
+    .form-group select:focus {
+      border-color: #8b5cf6;
+    }
+
+    .form-group textarea {
+      resize: vertical;
+      min-height: 80px;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    button {
+      width: 100%;
+      background: #8b5cf6;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    button:hover {
+      background: #7c3aed;
+    }
+
+    button:disabled {
+      background: #444;
+      cursor: not-allowed;
+    }
+
+    .tasks-list {
+      background: #1a1a1a;
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .tasks-header {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #888;
+      text-transform: uppercase;
+    }
+
+    .task-item {
+      background: #222;
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 8px;
+    }
+
+    .task-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .task-id {
+      font-size: 11px;
+      color: #888;
+      margin-bottom: 4px;
+    }
+
+    .task-prompt {
+      font-size: 12px;
+      color: #fff;
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .task-meta {
+      display: flex;
+      gap: 8px;
+      font-size: 10px;
+      color: #666;
+    }
+
+    .task-status {
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      text-transform: uppercase;
+    }
+
+    .task-status.pending {
+      background: #fbbf24;
+      color: #000;
+    }
+
+    .task-status.running {
+      background: #3b82f6;
+      color: #fff;
+    }
+
+    .task-status.completed {
+      background: #22c55e;
+      color: #fff;
+    }
+
+    .task-status.failed {
+      background: #ef4444;
+      color: #fff;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 20px;
+      color: #666;
+      font-size: 12px;
+    }
+
+    .log {
+      background: #1a1a1a;
+      border-radius: 8px;
+      padding: 12px;
+      margin-top: 16px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .log-header {
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: #888;
+      text-transform: uppercase;
+    }
+
+    .log-entry {
+      font-family: monospace;
+      font-size: 10px;
+      color: #666;
+      padding: 2px 0;
+    }
+
+    .log-entry.error {
+      color: #ef4444;
+    }
+
+    .log-entry.success {
+      color: #22c55e;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🤖 Qwen Automation</h1>
+    <p>Free AI Generation for Clipchamp</p>
+  </div>
+
+  <div class="status">
+    <div class="status-item">
+      <span class="status-label">Bridge Status</span>
+      <span class="status-value" id="bridge-status">Checking...</span>
+    </div>
+    <div class="status-item">
+      <span class="status-label">Qwen Tab</span>
+      <span class="status-value" id="qwen-status">Not detected</span>
+    </div>
+    <div class="status-item">
+      <span class="status-label">Queue</span>
+      <span class="status-value" id="queue-count">0 tasks</span>
+    </div>
+  </div>
+
+  <div class="task-form">
+    <div class="form-group">
+      <label>Prompt</label>
+      <textarea id="prompt-input" placeholder="Describe what you want to generate..."></textarea>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Mode</label>
+        <select id="mode-select">
+          <option value="image">Create Image</option>
+          <option value="video">Create Video</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Aspect Ratio</label>
+        <select id="ratio-select">
+          <option value="9:16">9:16 (TikTok/Shorts)</option>
+          <option value="16:9">16:9 (YouTube)</option>
+          <option value="1:1">1:1 (Square)</option>
+          <option value="3:4">3:4 (Portrait)</option>
+          <option value="4:3">4:3 (Landscape)</option>
+        </select>
+      </div>
+    </div>
+    <button id="submit-btn">Add to Queue</button>
+  </div>
+
+  <div class="tasks-list">
+    <div class="tasks-header">Task Queue</div>
+    <div id="tasks-container">
+      <div class="empty-state">No tasks in queue</div>
+    </div>
+  </div>
+
+  <div class="log">
+    <div class="log-header">Activity Log</div>
+    <div id="log-container"></div>
+  </div>
+
+  <script src="bridge.js"></script>
+</body>
+</html>
