@@ -2,7 +2,11 @@
   "manifest_version": 3,
   "name": "Qwen Automation - AI Generation for Clipchamp",
   "version": "1.0.0",
+  "version_name": "1.0.0",
   "description": "Automate Qwen AI for free image/video generation. Integrates with Open Clipchamp video editor.",
+  "author": {
+    "email": "clipchamp@example.com"
+  },
   "permissions": [
     "storage",
     "tabs",
@@ -17,7 +21,7 @@
     "http://localhost:3000/*"
   ],
   "action": {
-    "default_title": "Qwen Automation",
+    "default_title": "Qwen Automation - AI Generation",
     "default_icon": {
       "16": "src/assets/logo.png",
       "32": "src/assets/logo.png",
@@ -32,7 +36,7 @@
     "128": "src/assets/logo.png"
   },
   "background": {
-    "service_worker": "assets/service-worker.js",
+    "service_worker": "service-worker-loader.js",
     "type": "module"
   },
   "content_scripts": [
@@ -46,9 +50,10 @@
   "side_panel": {
     "default_path": "src/ui/side-panel/index.html"
   },
+  "offline_enabled": true,
   "web_accessible_resources": [
     {
-      "resources": ["assets/content.js"],
+      "resources": ["assets/content.js", "src/assets/logo.png"],
       "matches": ["*://chat.qwen.ai/*"]
     }
   ]

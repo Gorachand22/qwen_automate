@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Qwen Automation</title>
+  <link rel="icon" type="image/png" href="../../assets/logo.png">
   <style>
     * {
       margin: 0;
@@ -13,7 +14,7 @@
 
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #0f0f0f;
+      background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
       color: #fff;
       min-height: 100vh;
       padding: 16px;
@@ -23,25 +24,36 @@
       text-align: center;
       margin-bottom: 20px;
       padding-bottom: 16px;
-      border-bottom: 1px solid #333;
+      border-bottom: 1px solid rgba(139, 92, 246, 0.3);
+    }
+
+    .logo {
+      width: 48px;
+      height: 48px;
+      margin-bottom: 8px;
+      border-radius: 12px;
     }
 
     .header h1 {
       font-size: 18px;
       font-weight: 600;
       margin-bottom: 4px;
+      background: linear-gradient(90deg, #8b5cf6, #06b6d4);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
     }
 
     .header p {
-      font-size: 12px;
+      font-size: 11px;
       color: #888;
     }
 
     .status {
-      background: #1a1a1a;
-      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
       padding: 12px;
       margin-bottom: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
     }
 
     .status-item {
@@ -49,7 +61,7 @@
       justify-content: space-between;
       align-items: center;
       padding: 8px 0;
-      border-bottom: 1px solid #222;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
     }
 
     .status-item:last-child {
@@ -59,6 +71,17 @@
     .status-label {
       font-size: 12px;
       color: #888;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .status-label::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #444;
     }
 
     .status-value {
@@ -76,10 +99,11 @@
     }
 
     .task-form {
-      background: #1a1a1a;
-      border-radius: 8px;
-      padding: 12px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
+      padding: 16px;
       margin-bottom: 16px;
+      border: 1px solid rgba(139, 92, 246, 0.2);
     }
 
     .form-group {
@@ -89,22 +113,24 @@
     .form-group label {
       display: block;
       font-size: 11px;
-      color: #888;
-      margin-bottom: 4px;
+      color: #aaa;
+      margin-bottom: 6px;
       text-transform: uppercase;
+      letter-spacing: 0.5px;
     }
 
     .form-group input,
     .form-group textarea,
     .form-group select {
       width: 100%;
-      background: #222;
-      border: 1px solid #333;
-      border-radius: 6px;
-      padding: 8px 10px;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      padding: 10px 12px;
       font-size: 13px;
       color: #fff;
       outline: none;
+      transition: border-color 0.2s;
     }
 
     .form-group input:focus,
@@ -116,55 +142,70 @@
     .form-group textarea {
       resize: vertical;
       min-height: 80px;
+      font-family: inherit;
     }
 
     .form-row {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 8px;
+      gap: 10px;
     }
 
     button {
       width: 100%;
-      background: #8b5cf6;
+      background: linear-gradient(135deg, #8b5cf6 0%, #6366f1 100%);
       color: #fff;
       border: none;
-      border-radius: 6px;
-      padding: 10px;
-      font-size: 13px;
-      font-weight: 500;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 14px;
+      font-weight: 600;
       cursor: pointer;
-      transition: background 0.2s;
+      transition: all 0.2s;
+      box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
     }
 
     button:hover {
-      background: #7c3aed;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(139, 92, 246, 0.4);
+    }
+
+    button:active {
+      transform: translateY(0);
     }
 
     button:disabled {
       background: #444;
       cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
     }
 
     .tasks-list {
-      background: #1a1a1a;
-      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 12px;
       padding: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
     }
 
     .tasks-header {
       font-size: 12px;
       font-weight: 600;
-      margin-bottom: 8px;
+      margin-bottom: 10px;
       color: #888;
       text-transform: uppercase;
+      letter-spacing: 0.5px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
 
     .task-item {
-      background: #222;
-      border-radius: 6px;
-      padding: 10px;
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 8px;
+      padding: 12px;
       margin-bottom: 8px;
+      border-left: 3px solid #8b5cf6;
     }
 
     .task-item:last-child {
@@ -172,15 +213,16 @@
     }
 
     .task-id {
-      font-size: 11px;
-      color: #888;
+      font-size: 10px;
+      color: #666;
       margin-bottom: 4px;
+      font-family: monospace;
     }
 
     .task-prompt {
-      font-size: 12px;
+      font-size: 13px;
       color: #fff;
-      margin-bottom: 4px;
+      margin-bottom: 8px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -193,62 +235,83 @@
       color: #666;
     }
 
-    .task-status {
+    .task-meta span {
       padding: 2px 6px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 4px;
+    }
+
+    .task-status {
+      padding: 2px 8px;
       border-radius: 4px;
       font-size: 10px;
       text-transform: uppercase;
+      font-weight: 600;
     }
 
     .task-status.pending {
-      background: #fbbf24;
-      color: #000;
+      background: rgba(251, 191, 36, 0.2);
+      color: #fbbf24;
     }
 
     .task-status.running {
-      background: #3b82f6;
-      color: #fff;
+      background: rgba(59, 130, 246, 0.2);
+      color: #3b82f6;
+      animation: pulse 1.5s infinite;
     }
 
     .task-status.completed {
-      background: #22c55e;
-      color: #fff;
+      background: rgba(34, 197, 94, 0.2);
+      color: #22c55e;
     }
 
     .task-status.failed {
-      background: #ef4444;
-      color: #fff;
+      background: rgba(239, 68, 68, 0.2);
+      color: #ef4444;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
     }
 
     .empty-state {
       text-align: center;
-      padding: 20px;
-      color: #666;
-      font-size: 12px;
+      padding: 30px 20px;
+      color: #555;
+      font-size: 13px;
+    }
+
+    .empty-state::before {
+      content: '📋';
+      display: block;
+      font-size: 32px;
+      margin-bottom: 8px;
     }
 
     .log {
-      background: #1a1a1a;
-      border-radius: 8px;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 12px;
       padding: 12px;
       margin-top: 16px;
       max-height: 200px;
       overflow-y: auto;
+      font-family: 'Monaco', 'Menlo', monospace;
     }
 
     .log-header {
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 600;
       margin-bottom: 8px;
-      color: #888;
+      color: #666;
       text-transform: uppercase;
     }
 
     .log-entry {
-      font-family: monospace;
       font-size: 10px;
-      color: #666;
-      padding: 2px 0;
+      color: #555;
+      padding: 3px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.02);
     }
 
     .log-entry.error {
@@ -258,11 +321,30 @@
     .log-entry.success {
       color: #22c55e;
     }
+
+    .log-entry.info {
+      color: #3b82f6;
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      box-shadow: none;
+      margin-top: 8px;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.15);
+      box-shadow: none;
+      transform: none;
+    }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1>🤖 Qwen Automation</h1>
+    <img src="../../assets/logo.png" alt="Logo" class="logo">
+    <h1>Qwen Automation</h1>
     <p>Free AI Generation for Clipchamp</p>
   </div>
 
@@ -297,19 +379,23 @@
       <div class="form-group">
         <label>Aspect Ratio</label>
         <select id="ratio-select">
+          <option value="1:1">1:1 (Square)</option>
           <option value="9:16">9:16 (TikTok/Shorts)</option>
           <option value="16:9">16:9 (YouTube)</option>
-          <option value="1:1">1:1 (Square)</option>
           <option value="3:4">3:4 (Portrait)</option>
           <option value="4:3">4:3 (Landscape)</option>
         </select>
       </div>
     </div>
     <button id="submit-btn">Add to Queue</button>
+    <button id="open-qwen-btn" class="btn-secondary">Open Qwen Tab</button>
   </div>
 
   <div class="tasks-list">
-    <div class="tasks-header">Task Queue</div>
+    <div class="tasks-header">
+      <span>Task Queue</span>
+      <span id="task-count">0</span>
+    </div>
     <div id="tasks-container">
       <div class="empty-state">No tasks in queue</div>
     </div>

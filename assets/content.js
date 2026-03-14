@@ -3,629 +3,533 @@
  *
  * This script runs on chat.qwen.ai and handles:
  * - Mode selection (Create Image, Create Video)
- * - Aspect ratio selection (9:16, 16:9, 1:1, 3:4, 4:3)
- * - Prompt input
- * - Generation triggering
- * - Result downloading
+ * - Aspect ratio selection
+ * - Prompt input and generation
+ * - Download monitoring
  *
- * Communication via chrome.runtime messages with side panel.
+ * Based on grok_automate pattern - polls /api/qwen-bridge/tasks
  */
 
-console.log('[QwenAutomate] Content script loaded');
+const OM_BASE = "http://localhost:3000";
+const POLL_MS = 3000;
 
+let busy = false;
 
-// Aspect ratio mapping
-const ASPECT_RATIOS = {
-  '1:1': '1:1',
-  '9:16': '9:16',
-  '16:9': '16:9',
-  '3:4': '3:4',
-  '4:3': '4:3',
-};
+// ── Utilities ──────────────────────────────────────────────────────────────
 
-// Mode mapping
-const MODES = {
-  'image': 'Create Image',
-  'video': 'Create Video',
-};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// Sleep utility
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+/** Find a button whose trimmed innerText contains `text` (case-insensitive). */
+function btn(text) {
+    const lower = text.toLowerCase();
+    return [...document.querySelectorAll("button")].find(
+        b => b.innerText.trim().toLowerCase().includes(lower)
+    ) ?? null;
+}
+
+/** Fill a React textarea/input with a value (fires React's onChange). */
+function fillReact(el, value) {
+    const proto = (el.tagName === "TEXTAREA") ? HTMLTextAreaElement : HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(proto.prototype, "value")?.set;
+    setter?.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+}
 
 /**
- * Find an element by text content
+ * Click a custom React dropdown and pick an option by visible text.
+ * Same logic as grok_automate.
  */
-function findByText(selector, text) {
-  const elements = document.querySelectorAll(selector);
-  for (const el of elements) {
-    if (el.textContent?.toLowerCase().includes(text.toLowerCase())) {
-      return el;
+async function pickDropdownOption(label, optionText) {
+    // 1. Find section containing the label text
+    const allText = [...document.querySelectorAll("div, span, p, label, button")];
+
+    // Find the most specific text element containing the label (case insensitive)
+    const labelLower = label.toLowerCase();
+    const labelEls = allText.filter(el =>
+        el.innerText &&
+        el.innerText.toLowerCase().includes(labelLower) &&
+        el.children.length < 3 // Ignore giant wrapper divs
+    );
+
+    if (labelEls.length === 0) {
+        console.warn("[QwenAutomate] Could not find any label matching:", label);
+        return false;
     }
-  }
-  return null;
-}
 
-/**
- * Find button by text
- */
-function findButton(text) {
-  const buttons = document.querySelectorAll('button');
-  for (const btn of buttons) {
-    if (btn.textContent?.toLowerCase().includes(text.toLowerCase())) {
-      return btn;
+    // Sort by smallest string length to get the most exact match
+    labelEls.sort((a, b) => a.innerText.length - b.innerText.length);
+    const bestLabel = labelEls[0];
+
+    // 2. Find the trigger button near this label
+    let trigger = null;
+    let container = bestLabel;
+
+    for (let i = 0; i < 5; i++) {
+        if (!container) break;
+        // Look for typical Ant Design select triggers
+        const possibleTriggers = container.querySelectorAll("button, [role='combobox'], [class*='select'], div, svg");
+        for (const pt of possibleTriggers) {
+            if (pt !== bestLabel && pt.innerText) {
+                if (pt.tagName === "BUTTON" || pt.getAttribute("role") === "combobox" || pt.innerHTML.includes("<svg")) {
+                    trigger = pt;
+                    break;
+                }
+            }
+        }
+        if (trigger) break;
+
+        // Alternative: if the label is adjacent to the trigger div
+        if (container.nextElementSibling) {
+            const nextNode = container.nextElementSibling;
+            if (nextNode.innerHTML && nextNode.innerHTML.includes("<svg") && nextNode.innerText) {
+                trigger = nextNode;
+                break;
+            }
+        }
+        container = container.parentElement;
     }
-  }
-  return null;
-}
 
-/**
- * Click element with retry
- */
-async function clickWithRetry(selectorFn, maxRetries = 5, delay = 500) {
-  for (let i = 0; i < maxRetries; i++) {
-    const element = selectorFn();
-    if (element) {
-      element.click();
-      await sleep(delay);
-      return true;
+    if (!trigger) {
+        console.warn("[QwenAutomate] Found label, but no dropdown trigger for:", label);
+        return false;
     }
-    await sleep(delay);
-  }
-  return false;
-}
 
-/**
- * Fill React textarea
- */
-function fillReactTextarea(textarea, value) {
-  // Get native setter
-  const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-    window.HTMLTextAreaElement.prototype,
-    'value'
-  ).set;
-
-  // Set value
-  nativeInputValueSetter.call(textarea, value);
-
-  // Trigger React events
-  textarea.dispatchEvent(new Event('input', { bubbles: true }));
-  textarea.dispatchEvent(new Event('change', { bubbles: true }));
-}
-
-/**
- * Check if we're on the correct page (chat/generate)
- */
-function isOnGeneratePage() {
-  return window.location.href.includes('chat.qwen.ai');
-}
-
-/**
- * Open mode selector dropdown
- */
-async function openModeSelector() {
-  // Find the mode-select-current-mode element and click it
-  const modeSelect = document.querySelector('.mode-select');
-  if (!modeSelect) {
-    console.error('[QwenAutomate] Mode select not found');
-    return false;
-  }
-
-  const trigger = modeSelect.querySelector('.ant-dropdown-trigger');
-  if (trigger) {
     trigger.click();
-    await sleep(300);
-    return true;
-  }
+    await sleep(400);
 
-  // Try clicking the current mode display
-  const currentMode = modeSelect.querySelector('.mode-select-current-mode');
-  if (currentMode) {
-    currentMode.click();
-    await sleep(300);
-    return true;
-  }
+    // 3. Find the option in the now-open list
+    const optionLower = optionText.toLowerCase();
+    const allOptions = [...document.querySelectorAll("li, [role='option'], span, div")];
 
-  return false;
+    let optionEl = allOptions.find(el =>
+        el.innerText &&
+        el.innerText.toLowerCase().includes(optionLower) &&
+        el.children.length === 0
+    );
+
+    if (optionEl) {
+        const clickableWrapper = optionEl.closest("li, [role='option']") || optionEl;
+        clickableWrapper.click();
+        await sleep(300);
+        return true;
+    }
+
+    // Close the dropdown if we failed
+    trigger.click();
+    await sleep(200);
+    console.warn("[QwenAutomate] Option not found in dropdown:", optionText);
+    return false;
+}
+
+// ── Automation Steps ────────────────────────────────────────────────────────
+
+/** Maps task.mode to the UI element */
+const MODE_LABELS = {
+    textToImage: "Image",
+    textToVideo: "Video",
+    imageToVideo: "Video",
+    imageToImage: "Image",
+};
+
+/** Maps task.aspectRatio to the option text */
+const AR_OPTION_TEXT = {
+    "16:9": "16:9",
+    "9:16": "9:16",
+    "1:1": "1:1",
+    "3:4": "3:4",
+    "4:3": "4:3",
+    "1:1 (Square)": "1:1",
+    "9:16 (TikTok)": "9:16",
+    "16:9 (YouTube)": "16:9",
+};
+
+/**
+ * Click the + icon to create new generation
+ * In Qwen's UI, there should be a plus button to add new content
+ */
+async function clickNewChatOrPlus() {
+    console.log("[QwenAutomate] Looking for new chat/+ button");
+
+    // Try various patterns for Qwen's UI
+    // 1. Look for + button with SVG
+    const buttons = document.querySelectorAll("button");
+    for (const button of buttons) {
+        const svg = button.querySelector("svg");
+        if (svg) {
+            // Check for plus icon path
+            const paths = svg.querySelectorAll("path");
+            for (const path of paths) {
+                const d = path.getAttribute("d") || "";
+                // Common plus icon patterns
+                if (d.includes("M12 4v16m8-8H4") || d.includes("M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z") ||
+                    d.includes("M11 19v-6H5v-2h6V5h2v6h6v2h-6v6h-2z")) {
+                    button.click();
+                    await sleep(500);
+                    return true;
+                }
+            }
+        }
+        // Check for text
+        const text = button.textContent?.trim();
+        if (text === "+" || text === "Add" || text === "New" || text?.includes("Create")) {
+            button.click();
+            await sleep(500);
+            return true;
+        }
+    }
+
+    // 2. Look for specific class patterns
+    const addBtn = document.querySelector("[class*='add'], [class*='plus'], [class*='new']");
+    if (addBtn) {
+        addBtn.click();
+        await sleep(500);
+        return true;
+    }
+
+    // 3. Try new chat button in sidebar
+    const newChatBtn = btn("New Chat") || btn("New chat") || btn("New");
+    if (newChatBtn) {
+        newChatBtn.click();
+        await sleep(500);
+        return true;
+    }
+
+    return false;
 }
 
 /**
- * Select mode (Create Image or Create Video)
+ * Select mode (Image or Video generation)
+ * Qwen may have tabs or buttons for this
  */
 async function selectMode(mode) {
-  const modeText = MODES[mode] || mode;
-  console.log('[QwenAutomate] Selecting mode:', modeText);
+    const modeLabel = MODE_LABELS[mode] || "Image";
+    console.log("[QwenAutomate] Selecting mode:", modeLabel);
 
-  // First, check if already selected
-  const currentModeEl = document.querySelector('.mode-select-current-mode span:last-child');
-  if (currentModeEl && currentModeEl.textContent?.toLowerCase().includes(modeText.toLowerCase().replace('create ', ''))) {
-    console.log('[QwenAutomate] Mode already selected');
-    return true;
-  }
+    // Try dropdown selection
+    const found = await pickDropdownOption("Mode", modeLabel)
+        || await pickDropdownOption("Type", modeLabel)
+        || await pickDropdownOption("Create", modeLabel);
 
-  // Open the mode dropdown - click the + button
-  const plusButton = document.querySelector('.mode-select-open');
-  if (plusButton) {
-    plusButton.click();
+    if (found) return true;
+
+    // Try direct button click
+    const modeBtn = btn(modeLabel) || btn("Create " + modeLabel);
+    if (modeBtn) {
+        modeBtn.click();
+        await sleep(400);
+        return true;
+    }
+
+    // Try finding by image/video icon
+    const buttons = document.querySelectorAll("button");
+    for (const button of buttons) {
+        const text = button.textContent?.toLowerCase() || "";
+        if ((mode === "textToImage" || mode === "imageToImage" || mode === "image") &&
+            (text.includes("image") || text.includes("photo") || text.includes("picture"))) {
+            button.click();
+            await sleep(400);
+            return true;
+        }
+        if ((mode === "textToVideo" || mode === "video") &&
+            (text.includes("video") || text.includes("film") || text.includes("movie"))) {
+            button.click();
+            await sleep(400);
+            return true;
+        }
+    }
+
+    console.warn("[QwenAutomate] Could not select mode:", modeLabel);
+    return false;
+}
+
+/**
+ * Select aspect ratio using dropdown
+ */
+async function selectAspectRatio(aspectRatio) {
+    console.log("[QwenAutomate] Selecting aspect ratio:", aspectRatio);
+
+    const arText = AR_OPTION_TEXT[aspectRatio] || aspectRatio;
+
+    // Try various label patterns
+    const found = await pickDropdownOption("Ratio", arText)
+        || await pickDropdownOption("Size", arText)
+        || await pickDropdownOption("Aspect", arText)
+        || await pickDropdownOption("Resolution", arText)
+        || await pickDropdownOption("Dimensions", arText);
+
+    if (!found) {
+        // Try direct button click for aspect ratio
+        const buttons = document.querySelectorAll("button");
+        for (const button of buttons) {
+            if (button.textContent?.includes(aspectRatio)) {
+                button.click();
+                await sleep(300);
+                return true;
+            }
+        }
+        console.warn("[QwenAutomate] Aspect ratio not set:", aspectRatio);
+    }
+
+    return found;
+}
+
+/**
+ * Fill prompt and submit
+ */
+async function fillAndRun(taskId, prompt) {
+    // Route the next download to the qwen folder
+    chrome.runtime.sendMessage({ type: "SETUP_DOWNLOAD", folder: "qwen", prefix: taskId + "_" });
+
+    // Find the textarea
+    const ta = document.querySelector("textarea");
+    if (!ta) {
+        console.warn("[QwenAutomate] No textarea for prompt");
+        return postFailure(taskId, "No textarea found");
+    }
+
+    // Fill prompt
+    fillReact(ta, prompt);
     await sleep(400);
-  }
 
-  // Find and click the mode option
-  const options = document.querySelectorAll('[role="menuitem"], .ant-dropdown-menu-item, li');
-  for (const option of options) {
-    const text = option.textContent?.toLowerCase();
-    if (text?.includes('image') && mode === 'image') {
-      option.click();
-      await sleep(300);
-      return true;
+    // Find and click send/submit button
+    let sendBtn = btn("Send") || btn("Submit") || btn("Generate") || btn("Create");
+
+    // Alternative: look for send icon button
+    if (!sendBtn) {
+        const buttons = document.querySelectorAll("button");
+        for (const button of buttons) {
+            const svg = button.querySelector("svg");
+            if (svg) {
+                // Check for send icon (arrow right or paper plane)
+                const paths = svg.querySelectorAll("path");
+                for (const path of paths) {
+                    const d = path.getAttribute("d") || "";
+                    if (d.includes("M2.01 21L23 12") || d.includes("M2.01 21 23 12") ||
+                        d.includes("paper-plane") || d.includes("send")) {
+                        sendBtn = button;
+                        break;
+                    }
+                }
+            }
+            if (sendBtn) break;
+        }
     }
-    if (text?.includes('video') && mode === 'video') {
-      option.click();
-      await sleep(300);
-      return true;
+
+    // Check for primary button
+    if (!sendBtn) {
+        sendBtn = document.querySelector("button.ant-btn-primary, button.primary, [type='submit']");
     }
-  }
 
-  // Alternative: try the mode buttons directly
-  const modeButtons = document.querySelectorAll('button');
-  for (const btn of modeButtons) {
-    const text = btn.textContent?.toLowerCase();
-    if (text?.includes('create image') && mode === 'image') {
-      btn.click();
-      await sleep(300);
-      return true;
+    if (!sendBtn) {
+        console.warn("[QwenAutomate] No send button found");
+        return postFailure(taskId, "Send button not found");
     }
-    if (text?.includes('create video') && mode === 'video') {
-      btn.click();
-      await sleep(300);
-      return true;
+
+    // Check if button is disabled
+    if (sendBtn.disabled || sendBtn.classList.contains("ant-btn-disabled")) {
+        console.warn("[QwenAutomate] Send button is disabled");
+        return postFailure(taskId, "Send button is disabled");
     }
-  }
 
-  console.error('[QwenAutomate] Could not select mode:', modeText);
-  return false;
-}
+    // Record start time for download matching
+    const startTimeStamp = new Date().toISOString();
+    sendBtn.click();
+    console.log("[QwenAutomate] Clicked send at", startTimeStamp);
 
-/**
- * Open size selector dropdown
- */
-async function openSizeSelector() {
-  const sizeSelector = document.querySelector('.size-selector');
-  if (!sizeSelector) {
-    console.error('[QwenAutomate] Size selector not found');
-    return false;
-  }
-
-  const trigger = sizeSelector.querySelector('.ant-dropdown-trigger');
-  if (trigger) {
-    trigger.click();
-    await sleep(300);
-    return true;
-  }
-
-  // Click directly on the selector text
-  const selectorText = sizeSelector.querySelector('.selector-text');
-  if (selectorText) {
-    selectorText.click();
-    await sleep(300);
-    return true;
-  }
-
-  return false;
-}
-
-/**
- * Select aspect ratio
- */
-async function selectAspectRatio(ratio) {
-  console.log('[QwenAutomate] Selecting aspect ratio:', ratio);
-
-  // Check if already selected
-  const currentRatioEl = document.querySelector('.size-selector .ant-space-item');
-  if (currentRatioEl && currentRatioEl.textContent?.trim() === ratio) {
-    console.log('[QwenAutomate] Aspect ratio already selected');
-    return true;
-  }
-
-  // Open size selector
-  await openSizeSelector();
-
-  // Find and click the ratio option
-  await sleep(200);
-  const options = document.querySelectorAll('[role="menuitem"], .ant-dropdown-menu-item, li');
-  for (const option of options) {
-    const text = option.textContent?.trim();
-    if (text === ratio || text?.includes(ratio)) {
-      option.click();
-      await sleep(300);
-      return true;
-    }
-  }
-
-  // Alternative: try clicking by data attribute or other selectors
-  const ratioButtons = document.querySelectorAll('button, [role="option"]');
-  for (const btn of ratioButtons) {
-    const text = btn.textContent?.trim();
-    if (text === ratio) {
-      btn.click();
-      await sleep(300);
-      return true;
-    }
-  }
-
-  console.error('[QwenAutomate] Could not select aspect ratio:', ratio);
-  return false;
-}
-
-/**
- * Enter prompt in textarea
- */
-async function enterPrompt(prompt) {
-  console.log('[QwenAutomate] Entering prompt');
-
-  // Find the textarea
-  const textarea = document.querySelector('.message-input-textarea');
-  if (!textarea) {
-    console.error('[QwenAutomate] Textarea not found');
-    return false;
-  }
-
-  // Clear existing content
-  textarea.focus();
-  textarea.select();
-
-  // Fill with new prompt
-  fillReactTextarea(textarea, prompt);
-  await sleep(300);
-
-  return true;
-}
-
-/**
- * Click send button to start generation
- */
-async function clickSendButton() {
-  console.log('[QwenAutomate] Clicking send button');
-
-  const sendButton = document.querySelector('.send-button');
-  if (!sendButton) {
-    console.error('[QwenAutomate] Send button not found');
-    return false;
-  }
-
-  // Check if button is disabled
-  if (sendButton.classList.contains('disabled') || sendButton.hasAttribute('disabled')) {
-    console.error('[QwenAutomate] Send button is disabled');
-    return false;
-  }
-
-  sendButton.click();
-  await sleep(1000);
-
-  return true;
+    // Wait for completion
+    await waitForCompletion(taskId, startTimeStamp);
 }
 
 /**
  * Wait for generation to complete
  */
-async function waitForGeneration(timeout = 300000) {
-  console.log('[QwenAutomate] Waiting for generation to complete');
+async function waitForCompletion(taskId, startTimeStamp, maxMs = 300_000) {
+    const deadline = Date.now() + maxMs;
 
-  const startTime = Date.now();
+    while (Date.now() < deadline) {
+        await sleep(2000);
 
-  while (Date.now() - startTime < timeout) {
-    // Check for completion indicators
-    // 1. Look for generated image/video in the response
-    const responseContainer = document.querySelector('.response-message, [data-role="assistant"]');
-    if (responseContainer) {
-      // Check for images
-      const images = responseContainer.querySelectorAll('img[src^="blob:"], img[src*="qwen"]');
-      if (images.length > 0) {
-        console.log('[QwenAutomate] Generated images found');
-        return { success: true, type: 'image', count: images.length };
-      }
+        // Check for generated content
+        // 1. Look for images
+        const images = document.querySelectorAll("img[src^='blob:'], img[src*='qwen'], img[class*='generated']");
+        if (images.length > 0) {
+            console.log("[QwenAutomate] Generated images found");
+            await sleep(3000); // Wait for download to start
+            const matched = await findOurDownload(startTimeStamp);
+            if (matched) {
+                await waitForDownloadFinish(matched.id, deadline, taskId);
+                return;
+            }
+        }
 
-      // Check for video
-      const videos = responseContainer.querySelectorAll('video');
-      if (videos.length > 0) {
-        console.log('[QwenAutomate] Generated video found');
-        return { success: true, type: 'video', count: videos.length };
-      }
+        // 2. Look for videos
+        const videos = document.querySelectorAll("video");
+        if (videos.length > 0) {
+            console.log("[QwenAutomate] Generated video found");
+            await sleep(3000);
+            const matched = await findOurDownload(startTimeStamp);
+            if (matched) {
+                await waitForDownloadFinish(matched.id, deadline, taskId);
+                return;
+            }
+        }
 
-      // Check for download links
-      const downloadLinks = responseContainer.querySelectorAll('a[download], button[download]');
-      if (downloadLinks.length > 0) {
-        console.log('[QwenAutomate] Download links found');
-        return { success: true, type: 'download', count: downloadLinks.length };
-      }
+        // 3. Check for completion text
+        const bodyText = document.body.innerText;
+        if (bodyText.includes("Download") || bodyText.includes("Complete") || bodyText.includes("Done")) {
+            // Check for download buttons
+            const downloadBtns = document.querySelectorAll("[class*='download'], button[download], a[download]");
+            if (downloadBtns.length > 0) {
+                // Try to click download
+                downloadBtns[0].click();
+                await sleep(2000);
+                const matched = await findOurDownload(startTimeStamp);
+                if (matched) {
+                    await waitForDownloadFinish(matched.id, deadline, taskId);
+                    return;
+                }
+            }
+        }
+
+        // 4. Check for error
+        const errorEl = document.querySelector(".ant-message-error, [class*='error']");
+        if (errorEl && errorEl.textContent) {
+            console.error("[QwenAutomate] Generation error:", errorEl.textContent);
+            return postFailure(taskId, errorEl.textContent);
+        }
     }
 
-    // Check for "Generating" or loading state
-    const loadingIndicators = document.querySelectorAll('.loading, .generating, [class*="loading"], [class*="generating"]');
-    const isLoading = loadingIndicators.length > 0;
-
-    // Check for error messages
-    const errorEl = document.querySelector('.error, [class*="error"]');
-    if (errorEl && errorEl.textContent) {
-      console.error('[QwenAutomate] Generation error:', errorEl.textContent);
-      return { success: false, error: errorEl.textContent };
-    }
-
-    await sleep(2000);
-  }
-
-  return { success: false, error: 'Generation timeout' };
+    busy = false;
 }
 
 /**
- * Download generated content
+ * Find our download from chrome.downloads
  */
-async function downloadGeneratedContent(taskId) {
-  console.log('[QwenAutomate] Attempting to download generated content');
+function findOurDownload(startTimeISO) {
+    return new Promise(resolve => {
+        const queryTime = new Date(startTimeISO).getTime();
 
-  // Find generated content
-  const responseContainer = document.querySelector('.response-message:last-of-type, [data-role="assistant"]:last-of-type');
-  if (!responseContainer) {
-    return { success: false, error: 'No response container found' };
-  }
-
-  // Try to find and click download button
-  const downloadButtons = responseContainer.querySelectorAll('button[download], a[download], [class*="download"]');
-  for (const btn of downloadButtons) {
-    btn.click();
-    await sleep(500);
-  }
-
-  // Monitor downloads
-  return new Promise((resolve) => {
-    let downloadStarted = false;
-
-    chrome.downloads.onCreated.addListener(function onCreated(downloadItem) {
-      if (downloadItem.url.includes('qwen') || downloadItem.filename.includes('qwen')) {
-        downloadStarted = true;
-        chrome.downloads.onCreated.removeListener(onCreated);
-      }
-    });
-
-    chrome.downloads.onChanged.addListener(function onChanged(delta) {
-      if (delta.state && delta.state.current === 'complete') {
-        chrome.downloads.onChanged.removeListener(onChanged);
-
-        // Get the download item
-        chrome.downloads.search({ id: delta.id }, (items) => {
-          if (items.length > 0) {
-            const item = items[0];
-            resolve({
-              success: true,
-              filename: item.filename,
-              url: item.url,
+        chrome.downloads.search({
+            orderBy: ["-startTime"],
+            limit: 20
+        }, items => {
+            const recentItems = items.filter(it => {
+                if (!it.filename) return false;
+                return new Date(it.startTime).getTime() >= queryTime;
             });
-          }
+
+            // Video first
+            const video = recentItems.find(it => /\.(mp4|webm)$/i.test(it.filename));
+            if (video) return resolve(video);
+
+            // Then image
+            const images = recentItems.filter(it => /\.(png|jpg|jpeg|webp|gif)$/i.test(it.filename));
+            if (images.length > 0) {
+                resolve(images[0]);
+            } else {
+                resolve(null);
+            }
         });
-      }
     });
-
-    // Timeout after 30 seconds
-    setTimeout(() => {
-      if (!downloadStarted) {
-        resolve({ success: false, error: 'Download timeout' });
-      }
-    }, 30000);
-  });
 }
 
 /**
- * Get generated content URLs
+ * Wait for download to finish
  */
-async function getGeneratedContentUrls() {
-  const urls = [];
-  const responseContainer = document.querySelector('.response-message:last-of-type, [data-role="assistant"]:last-of-type');
+function waitForDownloadFinish(dlId, deadline, taskId) {
+    return new Promise(resolve => {
+        function check() {
+            if (Date.now() > deadline) { resolve(); return; }
+            chrome.downloads.search({ id: dlId }, ([item]) => {
+                if (!item) { resolve(); return; }
 
-  if (!responseContainer) {
-    return urls;
-  }
-
-  // Find images
-  const images = responseContainer.querySelectorAll('img');
-  for (const img of images) {
-    if (img.src && (img.src.startsWith('blob:') || img.src.includes('qwen'))) {
-      urls.push({ type: 'image', url: img.src });
-    }
-  }
-
-  // Find videos
-  const videos = responseContainer.querySelectorAll('video');
-  for (const video of videos) {
-    if (video.src) {
-      urls.push({ type: 'video', url: video.src });
-    }
-    // Check source elements
-    const sources = video.querySelectorAll('source');
-    for (const source of sources) {
-      if (source.src) {
-        urls.push({ type: 'video', url: source.src });
-      }
-    }
-  }
-
-  return urls;
+                if (item.state === "complete") {
+                    notifyComplete(item, taskId);
+                    resolve();
+                } else if (item.state === "interrupted") {
+                    console.error("[QwenAutomate] Download interrupted!", item.filename);
+                    postFailure(taskId, "Download interrupted: " + item.filename);
+                    resolve();
+                } else {
+                    setTimeout(check, 1500);
+                }
+            });
+        }
+        check();
+    });
 }
 
 /**
- * Create new chat for fresh generation
+ * POST completed download to /api/qwen-bridge/complete
  */
-async function createNewChat() {
-  console.log('[QwenAutomate] Creating new chat');
-
-  // Look for new chat button
-  const newChatButton = findButton('new chat') || findButton('new conversation');
-  if (newChatButton) {
-    newChatButton.click();
-    await sleep(1000);
-    return true;
-  }
-
-  // Alternative: navigate to home/create new chat
-  const homeLink = document.querySelector('a[href="/"], a[href="/create"]');
-  if (homeLink) {
-    homeLink.click();
-    await sleep(1000);
-    return true;
-  }
-
-  return false;
+async function notifyComplete(dlItem, originalTaskId) {
+    const type = dlItem.filename.endsWith(".mp4") || dlItem.filename.endsWith(".webm") ? "video" : "image";
+    console.log("[QwenAutomate] Download done →", dlItem.filename, "task:", originalTaskId);
+    try {
+        await fetch(`${OM_BASE}/api/qwen-bridge/complete`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ taskId: originalTaskId, type, dataBase64: dlItem.filename }),
+        });
+    } catch (e) { console.error("[QwenAutomate] /complete failed:", e); }
 }
 
-/**
- * Execute a generation task
- */
-async function executeTask(task) {
-  console.log('[QwenAutomate] Executing task:', task.id, task.mode);
-
-  try {
-    // 1. Create new chat for fresh generation
-    await createNewChat();
-    await sleep(500);
-
-    // 2. Select mode
-    const modeSelected = await selectMode(task.mode);
-    if (!modeSelected) {
-      return { success: false, error: 'Failed to select mode' };
-    }
-
-    // 3. Select aspect ratio if specified
-    if (task.aspectRatio) {
-      await selectAspectRatio(task.aspectRatio);
-    }
-
-    // 4. Enter prompt
-    const promptEntered = await enterPrompt(task.prompt);
-    if (!promptEntered) {
-      return { success: false, error: 'Failed to enter prompt' };
-    }
-
-    // 5. Click send button
-    const sent = await clickSendButton();
-    if (!sent) {
-      return { success: false, error: 'Failed to send prompt' };
-    }
-
-    // 6. Wait for generation
-    const result = await waitForGeneration(task.timeout || 300000);
-    if (!result.success) {
-      return { success: false, error: result.error };
-    }
-
-    // 7. Get generated content URLs
-    const urls = await getGeneratedContentUrls();
-
-    // 8. Notify bridge of completion
-    await fetch(`${BRIDGE_URL}/api/qwen-bridge/complete`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        taskId: task.id,
-        success: true,
-        type: result.type,
-        count: result.count,
-        urls: urls,
-      }),
-    });
-
-    return { success: true, urls };
-
-  } catch (error) {
-    console.error('[QwenAutomate] Task execution error:', error);
-
-    // Notify bridge of failure
-    await fetch(`${BRIDGE_URL}/api/qwen-bridge/complete`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        taskId: task.id,
-        success: false,
-        error: error.message,
-      }),
-    });
-
-    return { success: false, error: error.message };
-  }
+async function postFailure(taskId, message) {
+    try {
+        await fetch(`${OM_BASE}/api/qwen-bridge/complete`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ taskId, error: message }),
+        });
+    } catch (_) { }
+    busy = false;
 }
 
-// Listen for messages from side panel/background
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('[QwenAutomate] Received message:', message);
+// ── Main Handler ────────────────────────────────────────────────────────────
 
-  if (message.type === 'EXECUTE_TASK') {
-    executeTask(message.task).then(sendResponse);
-    return true; // Keep channel open for async response
-  }
+async function handleTask(task) {
+    busy = true;
+    console.log("[QwenAutomate] ▶ Handling task", task.id, task.mode, task.aspectRatio);
+    try {
+        // 1. Click new chat/+ button
+        await clickNewChatOrPlus();
+        await sleep(500);
 
-  if (message.type === 'GET_STATE') {
-    const state = {
-      url: window.location.href,
-      isOnGeneratePage: isOnGeneratePage(),
-      currentMode: document.querySelector('.mode-select-current-mode span:last-child')?.textContent,
-      currentRatio: document.querySelector('.size-selector .ant-space-item')?.textContent?.trim(),
-    };
-    sendResponse(state);
-    return true;
-  }
+        // 2. Select mode
+        await selectMode(task.mode);
+        await sleep(400);
 
-  if (message.type === 'SELECT_MODE') {
-    selectMode(message.mode).then(sendResponse);
-    return true;
-  }
+        // 3. Select aspect ratio if specified
+        if (task.aspectRatio) {
+            await selectAspectRatio(task.aspectRatio);
+            await sleep(300);
+        }
 
-  if (message.type === 'SELECT_RATIO') {
-    selectAspectRatio(message.ratio).then(sendResponse);
-    return true;
-  }
-
-  if (message.type === 'ENTER_PROMPT') {
-    enterPrompt(message.prompt).then(sendResponse);
-    return true;
-  }
-
-  if (message.type === 'SEND_PROMPT') {
-    clickSendButton().then(sendResponse);
-    return true;
-  }
-
-  if (message.type === 'CREATE_NEW_CHAT') {
-    createNewChat().then(sendResponse);
-    return true;
-  }
-});
-
-// Poll for tasks from bridge
-let busy = false;
-const POLL_INTERVAL = 3000;
-
-async function pollForTasks() {
-  if (busy) return;
-
-  try {
-    const response = await fetch(`${BRIDGE_URL}/api/qwen-bridge/tasks`, {
-      cache: 'no-store',
-    });
-
-    if (response.ok) {
-      const data = await response.json();
-      if (data.tasks && data.tasks.length > 0) {
-        busy = true;
-        await executeTask(data.tasks[0]);
-        busy = false;
-      }
+        // 4. Fill prompt and run
+        await fillAndRun(task.id, task.prompt);
+    } catch (err) {
+        console.error("[QwenAutomate] Task error:", err);
+        await postFailure(task.id, String(err));
     }
-  } catch (error) {
-    // Bridge not available, will retry
-  }
 }
 
-// Start polling after page load
-setTimeout(() => {
-  console.log('[QwenAutomate] Starting task polling');
-  setInterval(pollForTasks, POLL_INTERVAL);
-}, 2000);
+// ── Polling Loop ────────────────────────────────────────────────────────────
 
-console.log('[QwenAutomate] Content script initialized');
+async function poll() {
+    if (!busy) {
+        try {
+            const res = await fetch(`${OM_BASE}/api/qwen-bridge/tasks`, { cache: "no-store" });
+            if (res.ok) {
+                const { tasks } = await res.json();
+                if (tasks?.length) await handleTask(tasks[0]);
+            }
+        } catch (_) { /* server not ready yet */ }
+    }
+    setTimeout(poll, POLL_MS);
+}
+
+// Start after page loads
+setTimeout(poll, 2500);
+
+console.log("[QwenAutomate] Content script initialized");
